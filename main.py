@@ -28,6 +28,8 @@ MAX_HP = 20
 SUPER_DAMAGE = 20
 SUPER_COOLDOWN = 3.0
 
+BOSS_HP_GROWTH = 1.35
+
 DIFFICULTIES = {
     "easy": {"boss_hp": 50, "heal_interval": 5.0},
     "normal": {"boss_hp": 100, "heal_interval": 10.0},
@@ -65,19 +67,37 @@ class Player:
     def __init__(self):
         self.x = WIDTH * 0.5
         self.y = HEIGHT * 0.82
-        self.hp = MAX_HP
+
+        self.move_speed = PLAYER_SPEED
+        self.bullet_damage = 1
+        self.super_damage = SUPER_DAMAGE
+        self.super_cooldown = SUPER_COOLDOWN
+        self.max_hp = MAX_HP
+
+        self.hp = self.max_hp
         self.shot_cd = 0.0
         self.super_cd = 0.0
 
-    def reset(self):
+    def reset_position(self):
         self.x = WIDTH * 0.5
         self.y = HEIGHT * 0.82
-        self.hp = MAX_HP
+
+    def reset_run_stats(self):
+        self.move_speed = PLAYER_SPEED
+        self.bullet_damage = 1
+        self.super_damage = SUPER_DAMAGE
+        self.super_cooldown = SUPER_COOLDOWN
+        self.max_hp = MAX_HP
+        self.hp = self.max_hp
         self.shot_cd = 0.0
         self.super_cd = 0.0
 
+    def reset_for_new_run(self):
+        self.reset_position()
+        self.reset_run_stats()
+
     def update(self, dt, keys):
-        speed = PLAYER_SPEED
+        speed = self.move_speed
         if keys[pygame.K_LSHIFT] or keys[pygame.K_RSHIFT]:
             speed *= PLAYER_SLOW_MULT
 
@@ -117,7 +137,7 @@ class Player:
         return self.super_cd <= 0.0
 
     def use_super(self):
-        self.super_cd = SUPER_COOLDOWN
+        self.super_cd = self.super_cooldown
 
 
 class Enemy:
@@ -184,7 +204,7 @@ def spawn_player_bullets(player, bullets):
             -PLAYER_BULLET_SPEED,
             PLAYER_BULLET_RADIUS,
             True,
-            1,
+            player.bullet_damage,
         )
     )
 
@@ -213,37 +233,80 @@ def spawn_super_bullet(player, bullets):
             -SUPER_BULLET_SPEED,
             SUPER_BULLET_RADIUS,
             True,
-            SUPER_DAMAGE,
+            player.super_damage,
         )
     )
 
 
-def spawn_enemy_pattern(enemy, player, bullets, t_global):
-    ring_period = 1.25
-    aimed_period = 0.42
-
-    if int((t_global - 0.0) / ring_period) != int((t_global - 0.016) / ring_period):
-        n = 24
+def pattern_ring_burst(enemy, player, bullets, t_global, dt, level):
+    ring_period = max(0.95, 1.25 - level * 0.03)
+    if int(t_global / ring_period) != int((t_global - dt) / ring_period):
+        n = int(clamp(18 + level * 2, 18, 44))
         base = t_global * 1.6
+        spd = ENEMY_BULLET_SPEED * (1.0 + 0.03 * level)
         for i in range(n):
             ang = base + (i / n) * math.tau
-            vx = math.cos(ang) * ENEMY_BULLET_SPEED
-            vy = math.sin(ang) * ENEMY_BULLET_SPEED
+            vx = math.cos(ang) * spd
+            vy = math.sin(ang) * spd
             bullets.append(Bullet(enemy.x, enemy.y, vx, vy, ENEMY_BULLET_RADIUS, False, 1))
 
-    if int((t_global - 0.0) / aimed_period) != int((t_global - 0.016) / aimed_period):
+
+def pattern_aimed_spread(enemy, player, bullets, t_global, dt, level):
+    aimed_period = max(0.22, 0.42 - level * 0.01)
+    if int(t_global / aimed_period) != int((t_global - dt) / aimed_period):
         dx = player.x - enemy.x
         dy = player.y - enemy.y
         d = math.hypot(dx, dy)
         if d > 0.001:
             dx /= d
             dy /= d
-        spread = 0.18
+        spread = 0.20
+        spd = ENEMY_BULLET_SPEED * (1.10 + 0.02 * level)
         for s in (-spread, 0.0, spread):
             ang = math.atan2(dy, dx) + s
-            vx = math.cos(ang) * (ENEMY_BULLET_SPEED * 1.15)
-            vy = math.sin(ang) * (ENEMY_BULLET_SPEED * 1.15)
+            vx = math.cos(ang) * spd
+            vy = math.sin(ang) * spd
             bullets.append(Bullet(enemy.x, enemy.y, vx, vy, ENEMY_BULLET_RADIUS, False, 1))
+
+
+def pattern_spiral_stream(enemy, player, bullets, t_global, dt, level):
+    step_period = max(0.05, 0.09 - level * 0.002)
+    if int(t_global / step_period) != int((t_global - dt) / step_period):
+        ang = t_global * (2.2 + level * 0.12)
+        spd = ENEMY_BULLET_SPEED * (0.95 + 0.02 * level)
+        vx = math.cos(ang) * spd
+        vy = math.sin(ang) * spd
+        bullets.append(Bullet(enemy.x, enemy.y, vx, vy, ENEMY_BULLET_RADIUS, False, 1))
+
+
+def pattern_downward_rain(enemy, player, bullets, t_global, dt, level):
+    rain_period = max(0.10, 0.18 - level * 0.003)
+    if int(t_global / rain_period) != int((t_global - dt) / rain_period):
+        count = int(clamp(1 + level // 3, 1, 4))
+        for _ in range(count):
+            ang = math.pi * 0.5 + random.uniform(-0.55, 0.55)
+            spd = ENEMY_BULLET_SPEED * (0.95 + 0.02 * level)
+            vx = math.cos(ang) * spd
+            vy = math.sin(ang) * spd
+            bullets.append(Bullet(enemy.x, enemy.y, vx, vy, ENEMY_BULLET_RADIUS, False, 1))
+
+
+PATTERN_POOL = [
+    ("Ring Burst", pattern_ring_burst),
+    ("Aimed Spread", pattern_aimed_spread),
+    ("Spiral Stream", pattern_spiral_stream),
+    ("Downward Rain", pattern_downward_rain),
+]
+
+
+def choose_patterns(level):
+    n = int(clamp(1 + level // 2, 1, len(PATTERN_POOL)))
+    return random.sample(PATTERN_POOL, n)
+
+
+def spawn_enemy_patterns(enemy, player, bullets, t_global, dt, level, patterns):
+    for _, fn in patterns:
+        fn(enemy, player, bullets, t_global, dt, level)
 
 
 def draw_text_center(surface, font, text, y, color):
@@ -271,10 +334,54 @@ def draw_button(surface, font, rect, text, enabled=True):
     return hovered
 
 
-def reset_game(player, enemy, boss_max_hp, heal_interval):
-    player.reset()
+UPGRADE_POOL = [
+    ("speed", "Speed Up", "+40 move speed"),
+    ("damage", "Damage Up", "+1 bullet damage"),
+    ("super_damage", "Super Damage", "+10 super damage"),
+    ("super_cd", "Super Cooldown", "-0.4s super cooldown"),
+    ("health", "Max Health", "+5 max HP"),
+]
+
+
+def roll_upgrades():
+    return random.sample(UPGRADE_POOL, 3)
+
+
+def apply_upgrade(player, upgrade_id):
+    if upgrade_id == "speed":
+        player.move_speed += 40.0
+    elif upgrade_id == "damage":
+        player.bullet_damage += 1
+    elif upgrade_id == "super_damage":
+        player.super_damage += 10
+    elif upgrade_id == "super_cd":
+        player.super_cooldown = max(0.6, player.super_cooldown - 0.4)
+    elif upgrade_id == "health":
+        player.max_hp += 5
+        player.hp = min(player.max_hp, player.hp + 5)
+
+
+def boss_hp_for_level(base_boss_hp, level):
+    return int(round(base_boss_hp * (BOSS_HP_GROWTH ** (level - 1))))
+
+
+def reset_run(player, enemy, base_boss_hp, heal_interval):
+    player.reset_for_new_run()
     enemy.reset()
-    return [], [], [], 0.0, boss_max_hp, boss_max_hp, heal_interval
+    level = 1
+    boss_max_hp = boss_hp_for_level(base_boss_hp, level)
+    boss_hp = boss_max_hp
+    patterns = choose_patterns(level)
+    return [], [], [], 0.0, level, boss_hp, boss_max_hp, heal_interval, heal_interval, patterns
+
+
+def start_next_level(player, enemy, base_boss_hp, heal_interval, level):
+    player.reset_position()
+    enemy.reset()
+    boss_max_hp = boss_hp_for_level(base_boss_hp, level)
+    boss_hp = boss_max_hp
+    patterns = choose_patterns(level)
+    return [], [], [], 0.0, boss_hp, boss_max_hp, heal_interval, patterns
 
 
 def main():
@@ -295,10 +402,15 @@ def main():
     heal_pickups = []
     t_global = 0.0
     difficulty = DEFAULT_DIFFICULTY
-    boss_max_hp = DIFFICULTIES[difficulty]["boss_hp"]
+    base_boss_hp = DIFFICULTIES[difficulty]["boss_hp"]
     heal_interval = DIFFICULTIES[difficulty]["heal_interval"]
     heal_spawn_timer = heal_interval
+    level = 1
+    boss_max_hp = boss_hp_for_level(base_boss_hp, level)
     boss_hp = boss_max_hp
+    patterns = choose_patterns(level)
+
+    upgrade_choices = []
 
     player_color_idx = 0
     enemy_color_idx = 4
@@ -333,27 +445,45 @@ def main():
                 running = False
             elif event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_ESCAPE:
-                    if state == "win":
+                    if state in ("upgrade",):
                         state = "menu"
                     else:
                         running = False
-                if event.key == pygame.K_p and state not in ("game_over", "win"):
+                if event.key == pygame.K_p and state in ("playing", "paused"):
                     state = "paused" if state == "playing" else "playing"
                 if event.key == pygame.K_x and state == "playing":
                     if boss_hp > 0 and player.can_super():
                         spawn_super_bullet(player, player_bullets)
                         player.use_super()
-                if state in ("game_over", "win") and event.key == pygame.K_r:
+                if state == "upgrade" and event.key in (pygame.K_1, pygame.K_2, pygame.K_3):
+                    idx = event.key - pygame.K_1
+                    if 0 <= idx < len(upgrade_choices):
+                        apply_upgrade(player, upgrade_choices[idx][0])
+                        level += 1
+                        (
+                            player_bullets,
+                            enemy_bullets,
+                            heal_pickups,
+                            t_global,
+                            boss_hp,
+                            boss_max_hp,
+                            heal_spawn_timer,
+                            patterns,
+                        ) = start_next_level(player, enemy, base_boss_hp, heal_interval, level)
+                        state = "playing"
+                if state == "game_over" and event.key == pygame.K_r:
                     (
                         player_bullets,
                         enemy_bullets,
                         heal_pickups,
                         t_global,
+                        level,
                         boss_hp,
                         boss_max_hp,
                         heal_interval,
-                    ) = reset_game(player, enemy, boss_max_hp, heal_interval)
-                    heal_spawn_timer = heal_interval
+                        heal_spawn_timer,
+                        patterns,
+                    ) = reset_run(player, enemy, base_boss_hp, heal_interval)
                     state = "playing"
             elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                 mx, my = event.pos
@@ -364,11 +494,13 @@ def main():
                             enemy_bullets,
                             heal_pickups,
                             t_global,
+                            level,
                             boss_hp,
                             boss_max_hp,
                             heal_interval,
-                        ) = reset_game(player, enemy, boss_max_hp, heal_interval)
-                        heal_spawn_timer = heal_interval
+                            heal_spawn_timer,
+                            patterns,
+                        ) = reset_run(player, enemy, base_boss_hp, heal_interval)
                         state = "playing"
                     elif options_rect.collidepoint(mx, my):
                         state = "options"
@@ -398,6 +530,30 @@ def main():
 
                     boss_max_hp = DIFFICULTIES[difficulty]["boss_hp"]
                     heal_interval = DIFFICULTIES[difficulty]["heal_interval"]
+                    base_boss_hp = DIFFICULTIES[difficulty]["boss_hp"]
+
+                elif state == "upgrade":
+                    up_rects = [
+                        pygame.Rect(WIDTH // 2 - 240, int(HEIGHT * 0.42), 480, 56),
+                        pygame.Rect(WIDTH // 2 - 240, int(HEIGHT * 0.52), 480, 56),
+                        pygame.Rect(WIDTH // 2 - 240, int(HEIGHT * 0.62), 480, 56),
+                    ]
+                    for i, r in enumerate(up_rects):
+                        if r.collidepoint(mx, my) and i < len(upgrade_choices):
+                            apply_upgrade(player, upgrade_choices[i][0])
+                            level += 1
+                            (
+                                player_bullets,
+                                enemy_bullets,
+                                heal_pickups,
+                                t_global,
+                                boss_hp,
+                                boss_max_hp,
+                                heal_spawn_timer,
+                                patterns,
+                            ) = start_next_level(player, enemy, base_boss_hp, heal_interval, level)
+                            state = "playing"
+                            break
 
         keys = pygame.key.get_pressed()
 
@@ -416,7 +572,7 @@ def main():
                 spawn_player_bullets(player, player_bullets)
 
             if boss_hp > 0:
-                spawn_enemy_pattern(enemy, player, enemy_bullets, t_global)
+                spawn_enemy_patterns(enemy, player, enemy_bullets, t_global, dt, level, patterns)
 
             for b in player_bullets:
                 b.update(dt)
@@ -437,14 +593,17 @@ def main():
                 if not p.dead:
                     if dist2(p.x, p.y, player.x, player.y) <= (p.radius + PLAYER_RADIUS) ** 2:
                         p.dead = True
-                        player.hp = min(MAX_HP, player.hp + HEAL_AMOUNT)
+                        player.hp = min(player.max_hp, player.hp + HEAL_AMOUNT)
 
             player_bullets = [b for b in player_bullets if not b.dead]
             enemy_bullets = [b for b in enemy_bullets if not b.dead]
             heal_pickups = [p for p in heal_pickups if not p.dead]
 
             if boss_hp <= 0:
-                state = "win"
+                state = "upgrade"
+                upgrade_choices = roll_upgrades()
+                enemy_bullets = []
+                heal_pickups = []
 
             if player.hp <= 0:
                 state = "game_over"
@@ -522,15 +681,18 @@ def main():
         )
         pygame.draw.circle(screen, (40, 40, 40), (px, py), 3)
 
-        hp_text = font.render(f"HP: {player.hp}/{MAX_HP}", True, (235, 235, 235))
+        hp_text = font.render(f"HP: {player.hp}/{player.max_hp}", True, (235, 235, 235))
         screen.blit(hp_text, (16, 14))
+
+        lvl_text = font.render(f"Level: {level}", True, (235, 235, 235))
+        screen.blit(lvl_text, (16, 86))
 
         bar_x = 16
         bar_y = 42
         bar_w = 220
         bar_h = 12
         pygame.draw.rect(screen, (30, 30, 40), (bar_x, bar_y, bar_w, bar_h), border_radius=3)
-        fill_w = int(bar_w * (player.hp / MAX_HP))
+        fill_w = int(bar_w * (player.hp / player.max_hp)) if player.max_hp > 0 else 0
         pygame.draw.rect(screen, (90, 220, 120), (bar_x, bar_y, fill_w, bar_h), border_radius=3)
 
         if player.super_cd <= 0.0 and state == "playing":
@@ -580,13 +742,22 @@ def main():
             draw_text_center(screen, font, "Press R to Restart", HEIGHT * 0.54, (220, 220, 220))
             draw_text_center(screen, font, "Esc to Quit", HEIGHT * 0.60, (220, 220, 220))
 
-        if state == "win":
+        if state == "upgrade":
             overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
-            overlay.fill((0, 0, 0, 150))
+            overlay.fill((0, 0, 0, 170))
             screen.blit(overlay, (0, 0))
-            draw_text_center(screen, big_font, "YOU WIN", HEIGHT * 0.42, (255, 255, 255))
-            draw_text_center(screen, font, "Press R to Restart", HEIGHT * 0.54, (220, 220, 220))
-            draw_text_center(screen, font, "Esc: Quit to Menu", HEIGHT * 0.60, (220, 220, 220))
+            draw_text_center(screen, big_font, "LEVEL CLEARED", HEIGHT * 0.28, (255, 255, 255))
+            draw_text_center(screen, font, "Choose 1 upgrade (click or press 1/2/3)", HEIGHT * 0.36, (220, 220, 220))
+
+            up_rects = [
+                pygame.Rect(WIDTH // 2 - 240, int(HEIGHT * 0.42), 480, 56),
+                pygame.Rect(WIDTH // 2 - 240, int(HEIGHT * 0.52), 480, 56),
+                pygame.Rect(WIDTH // 2 - 240, int(HEIGHT * 0.62), 480, 56),
+            ]
+            for i, r in enumerate(up_rects):
+                if i < len(upgrade_choices):
+                    uid, name, desc = upgrade_choices[i]
+                    draw_button(screen, font, r, f"{i+1}. {name}  ({desc})")
 
         pygame.display.flip()
 
