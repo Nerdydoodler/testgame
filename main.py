@@ -24,10 +24,31 @@ ENEMY_RADIUS = 18
 ENEMY_BULLET_SPEED = 220.0
 ENEMY_BULLET_RADIUS = 5
 
-BOSS_MAX_HP = 100
 MAX_HP = 20
 SUPER_DAMAGE = 20
 SUPER_COOLDOWN = 3.0
+
+DIFFICULTIES = {
+    "easy": {"boss_hp": 50, "heal_interval": 5.0},
+    "normal": {"boss_hp": 100, "heal_interval": 10.0},
+    "hard": {"boss_hp": 200, "heal_interval": 30.0},
+}
+DIFFICULTY_ORDER = ["easy", "normal", "hard"]
+DEFAULT_DIFFICULTY = "normal"
+
+HEAL_AMOUNT = 5
+HEAL_FALL_SPEED = 70.0
+HEAL_RADIUS = 12
+
+COLOR_PALETTE = [
+    (120, 255, 140),
+    (110, 200, 255),
+    (255, 220, 120),
+    (255, 140, 220),
+    (220, 80, 80),
+    (180, 180, 255),
+    (235, 235, 235),
+]
 
 
 def clamp(v, lo, hi):
@@ -140,6 +161,20 @@ class Bullet:
             self.dead = True
 
 
+class HealPickup:
+    def __init__(self, x):
+        self.x = x
+        self.y = -24
+        self.vy = HEAL_FALL_SPEED
+        self.radius = HEAL_RADIUS
+        self.dead = False
+
+    def update(self, dt):
+        self.y += self.vy * dt
+        if self.y > HEIGHT + 40:
+            self.dead = True
+
+
 def spawn_player_bullets(player, bullets):
     bullets.append(
         Bullet(
@@ -152,6 +187,21 @@ def spawn_player_bullets(player, bullets):
             1,
         )
     )
+
+
+def spawn_heal_pickup(pickups):
+    x = random.uniform(24, WIDTH - 24)
+    pickups.append(HealPickup(x))
+
+
+def draw_heal_pickup(surface, p):
+    x = int(p.x)
+    y = int(p.y)
+    s = 7
+    w = 4
+    green = (80, 230, 110)
+    pygame.draw.rect(surface, green, (x - w // 2, y - s, w, 2 * s), border_radius=2)
+    pygame.draw.rect(surface, green, (x - s, y - w // 2, 2 * s, w), border_radius=2)
 
 
 def spawn_super_bullet(player, bullets):
@@ -202,10 +252,29 @@ def draw_text_center(surface, font, text, y, color):
     surface.blit(img, rect)
 
 
-def reset_game(player, enemy):
+def draw_button(surface, font, rect, text, enabled=True):
+    mouse_pos = pygame.mouse.get_pos()
+    hovered = rect.collidepoint(mouse_pos)
+    if not enabled:
+        bg = (45, 45, 55)
+        fg = (150, 150, 160)
+        border = (80, 80, 95)
+    else:
+        bg = (55, 55, 70) if not hovered else (75, 75, 95)
+        fg = (235, 235, 235)
+        border = (120, 120, 140)
+
+    pygame.draw.rect(surface, bg, rect, border_radius=10)
+    pygame.draw.rect(surface, border, rect, width=2, border_radius=10)
+    img = font.render(text, True, fg)
+    surface.blit(img, img.get_rect(center=rect.center))
+    return hovered
+
+
+def reset_game(player, enemy, boss_max_hp, heal_interval):
     player.reset()
     enemy.reset()
-    return [], [], 0.0, BOSS_MAX_HP
+    return [], [], [], 0.0, boss_max_hp, boss_max_hp, heal_interval
 
 
 def main():
@@ -216,28 +285,58 @@ def main():
 
     font = pygame.font.SysFont(None, 28)
     big_font = pygame.font.SysFont(None, 72)
+    menu_font = pygame.font.SysFont(None, 44)
 
     player = Player()
     enemy = Enemy()
 
     player_bullets = []
     enemy_bullets = []
+    heal_pickups = []
     t_global = 0.0
-    boss_hp = BOSS_MAX_HP
+    difficulty = DEFAULT_DIFFICULTY
+    boss_max_hp = DIFFICULTIES[difficulty]["boss_hp"]
+    heal_interval = DIFFICULTIES[difficulty]["heal_interval"]
+    heal_spawn_timer = heal_interval
+    boss_hp = boss_max_hp
 
-    state = "playing"
+    player_color_idx = 0
+    enemy_color_idx = 4
+    player_color = COLOR_PALETTE[player_color_idx]
+    enemy_color = COLOR_PALETTE[enemy_color_idx]
+
+    state = "menu"
 
     running = True
     while running:
         dt = clock.tick(FPS) / 1000.0
         dt = min(dt, 1.0 / 20.0)
 
+        play_rect = pygame.Rect(WIDTH // 2 - 140, int(HEIGHT * 0.46), 280, 56)
+        options_rect = pygame.Rect(WIDTH // 2 - 140, int(HEIGHT * 0.56), 280, 56)
+        quit_rect = pygame.Rect(WIDTH // 2 - 140, int(HEIGHT * 0.66), 280, 56)
+
+        opt_back_rect = pygame.Rect(18, 18, 120, 44)
+        p_left = pygame.Rect(WIDTH // 2 + 40, int(HEIGHT * 0.36), 46, 46)
+        p_right = pygame.Rect(WIDTH // 2 + 200, int(HEIGHT * 0.36), 46, 46)
+        e_left = pygame.Rect(WIDTH // 2 + 40, int(HEIGHT * 0.48), 46, 46)
+        e_right = pygame.Rect(WIDTH // 2 + 200, int(HEIGHT * 0.48), 46, 46)
+        p_swatch = pygame.Rect(WIDTH // 2 + 100, int(HEIGHT * 0.36), 90, 46)
+        e_swatch = pygame.Rect(WIDTH // 2 + 100, int(HEIGHT * 0.48), 90, 46)
+
+        diff_easy = pygame.Rect(WIDTH // 2 - 200, int(HEIGHT * 0.62), 120, 50)
+        diff_normal = pygame.Rect(WIDTH // 2 - 60, int(HEIGHT * 0.62), 120, 50)
+        diff_hard = pygame.Rect(WIDTH // 2 + 80, int(HEIGHT * 0.62), 120, 50)
+
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
             elif event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_ESCAPE:
-                    running = False
+                    if state == "win":
+                        state = "menu"
+                    else:
+                        running = False
                 if event.key == pygame.K_p and state not in ("game_over", "win"):
                     state = "paused" if state == "playing" else "playing"
                 if event.key == pygame.K_x and state == "playing":
@@ -245,8 +344,60 @@ def main():
                         spawn_super_bullet(player, player_bullets)
                         player.use_super()
                 if state in ("game_over", "win") and event.key == pygame.K_r:
-                    player_bullets, enemy_bullets, t_global, boss_hp = reset_game(player, enemy)
+                    (
+                        player_bullets,
+                        enemy_bullets,
+                        heal_pickups,
+                        t_global,
+                        boss_hp,
+                        boss_max_hp,
+                        heal_interval,
+                    ) = reset_game(player, enemy, boss_max_hp, heal_interval)
+                    heal_spawn_timer = heal_interval
                     state = "playing"
+            elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                mx, my = event.pos
+                if state == "menu":
+                    if play_rect.collidepoint(mx, my):
+                        (
+                            player_bullets,
+                            enemy_bullets,
+                            heal_pickups,
+                            t_global,
+                            boss_hp,
+                            boss_max_hp,
+                            heal_interval,
+                        ) = reset_game(player, enemy, boss_max_hp, heal_interval)
+                        heal_spawn_timer = heal_interval
+                        state = "playing"
+                    elif options_rect.collidepoint(mx, my):
+                        state = "options"
+                    elif quit_rect.collidepoint(mx, my):
+                        running = False
+                elif state == "options":
+                    if opt_back_rect.collidepoint(mx, my):
+                        state = "menu"
+                    elif p_left.collidepoint(mx, my):
+                        player_color_idx = (player_color_idx - 1) % len(COLOR_PALETTE)
+                        player_color = COLOR_PALETTE[player_color_idx]
+                    elif p_right.collidepoint(mx, my):
+                        player_color_idx = (player_color_idx + 1) % len(COLOR_PALETTE)
+                        player_color = COLOR_PALETTE[player_color_idx]
+                    elif e_left.collidepoint(mx, my):
+                        enemy_color_idx = (enemy_color_idx - 1) % len(COLOR_PALETTE)
+                        enemy_color = COLOR_PALETTE[enemy_color_idx]
+                    elif e_right.collidepoint(mx, my):
+                        enemy_color_idx = (enemy_color_idx + 1) % len(COLOR_PALETTE)
+                        enemy_color = COLOR_PALETTE[enemy_color_idx]
+                    elif diff_easy.collidepoint(mx, my):
+                        difficulty = "easy"
+                    elif diff_normal.collidepoint(mx, my):
+                        difficulty = "normal"
+                    elif diff_hard.collidepoint(mx, my):
+                        difficulty = "hard"
+
+                    boss_max_hp = DIFFICULTIES[difficulty]["boss_hp"]
+                    heal_interval = DIFFICULTIES[difficulty]["heal_interval"]
 
         keys = pygame.key.get_pressed()
 
@@ -254,6 +405,11 @@ def main():
             t_global += dt
             player.update(dt, keys)
             enemy.update(dt)
+
+            heal_spawn_timer -= dt
+            if heal_spawn_timer <= 0.0:
+                spawn_heal_pickup(heal_pickups)
+                heal_spawn_timer = heal_interval
 
             if (keys[pygame.K_z] or keys[pygame.K_SPACE]) and player.can_shoot():
                 player.shoot()
@@ -276,8 +432,16 @@ def main():
                         b.dead = True
                         player.hp = max(0, player.hp - 1)
 
+            for p in heal_pickups:
+                p.update(dt)
+                if not p.dead:
+                    if dist2(p.x, p.y, player.x, player.y) <= (p.radius + PLAYER_RADIUS) ** 2:
+                        p.dead = True
+                        player.hp = min(MAX_HP, player.hp + HEAL_AMOUNT)
+
             player_bullets = [b for b in player_bullets if not b.dead]
             enemy_bullets = [b for b in enemy_bullets if not b.dead]
+            heal_pickups = [p for p in heal_pickups if not p.dead]
 
             if boss_hp <= 0:
                 state = "win"
@@ -287,7 +451,55 @@ def main():
 
         screen.fill((10, 10, 14))
 
-        pygame.draw.circle(screen, (220, 80, 80), (int(enemy.x), int(enemy.y)), ENEMY_RADIUS)
+        if state == "menu":
+            draw_text_center(screen, big_font, "BULLET HELL", HEIGHT * 0.26, (235, 235, 235))
+            draw_text_center(screen, font, "Z/Space: Shoot   X: Super   P: Pause", HEIGHT * 0.34, (200, 200, 210))
+            draw_button(screen, menu_font, play_rect, "PLAY")
+            draw_button(screen, menu_font, options_rect, "OPTIONS")
+            draw_button(screen, menu_font, quit_rect, "QUIT")
+            pygame.display.flip()
+            continue
+
+        if state == "options":
+            draw_text_center(screen, big_font, "OPTIONS", HEIGHT * 0.20, (235, 235, 235))
+
+            draw_button(screen, font, opt_back_rect, "BACK")
+
+            player_label = font.render("Player Color", True, (235, 235, 235))
+            screen.blit(player_label, (WIDTH // 2 - 200, int(HEIGHT * 0.36) + 12))
+            draw_button(screen, font, p_left, "<")
+            pygame.draw.rect(screen, player_color, p_swatch, border_radius=8)
+            pygame.draw.rect(screen, (140, 140, 160), p_swatch, width=2, border_radius=8)
+            draw_button(screen, font, p_right, ">")
+
+            enemy_label = font.render("Enemy Color", True, (235, 235, 235))
+            screen.blit(enemy_label, (WIDTH // 2 - 200, int(HEIGHT * 0.48) + 12))
+            draw_button(screen, font, e_left, "<")
+            pygame.draw.rect(screen, enemy_color, e_swatch, border_radius=8)
+            pygame.draw.rect(screen, (140, 140, 160), e_swatch, width=2, border_radius=8)
+            draw_button(screen, font, e_right, ">")
+
+            diff_label = font.render("Difficulty", True, (235, 235, 235))
+            screen.blit(diff_label, (WIDTH // 2 - 200, int(HEIGHT * 0.62) + 14))
+
+            draw_button(screen, font, diff_easy, "EASY", enabled=True)
+            draw_button(screen, font, diff_normal, "NORMAL", enabled=True)
+            draw_button(screen, font, diff_hard, "HARD", enabled=True)
+
+            sel_rect = {"easy": diff_easy, "normal": diff_normal, "hard": diff_hard}[difficulty]
+            pygame.draw.rect(screen, (90, 220, 120), sel_rect, width=4, border_radius=10)
+
+            hint = font.render(
+                f"Boss HP: {DIFFICULTIES[difficulty]['boss_hp']}   Heal every ~{DIFFICULTIES[difficulty]['heal_interval']:.0f}s",
+                True,
+                (200, 200, 210),
+            )
+            screen.blit(hint, (WIDTH // 2 - 200, int(HEIGHT * 0.72)))
+
+            pygame.display.flip()
+            continue
+
+        pygame.draw.circle(screen, enemy_color, (int(enemy.x), int(enemy.y)), ENEMY_RADIUS)
 
         for b in player_bullets:
             if b.damage >= SUPER_DAMAGE:
@@ -298,11 +510,14 @@ def main():
         for b in enemy_bullets:
             pygame.draw.circle(screen, (255, 200, 90), (int(b.x), int(b.y)), b.radius)
 
+        for p in heal_pickups:
+            draw_heal_pickup(screen, p)
+
         px = int(player.x)
         py = int(player.y)
         pygame.draw.polygon(
             screen,
-            (120, 255, 140),
+            player_color,
             [(px, py - 14), (px - 10, py + 12), (px + 10, py + 12)],
         )
         pygame.draw.circle(screen, (40, 40, 40), (px, py), 3)
@@ -332,7 +547,7 @@ def main():
             (boss_bar_x, boss_bar_y, boss_bar_w, boss_bar_h),
             border_radius=6,
         )
-        boss_fill_w = int(boss_bar_w * (boss_hp / BOSS_MAX_HP))
+        boss_fill_w = int(boss_bar_w * (boss_hp / boss_max_hp)) if boss_max_hp > 0 else 0
         pygame.draw.rect(
             screen,
             (220, 45, 45),
@@ -347,7 +562,7 @@ def main():
             border_radius=6,
         )
 
-        boss_text = font.render(f"BOSS HP: {boss_hp}/{BOSS_MAX_HP}", True, (235, 235, 235))
+        boss_text = font.render(f"BOSS HP: {boss_hp}/{boss_max_hp}", True, (235, 235, 235))
         screen.blit(boss_text, (boss_bar_x + 10, boss_bar_y - 22))
 
         if state == "paused":
@@ -371,7 +586,7 @@ def main():
             screen.blit(overlay, (0, 0))
             draw_text_center(screen, big_font, "YOU WIN", HEIGHT * 0.42, (255, 255, 255))
             draw_text_center(screen, font, "Press R to Restart", HEIGHT * 0.54, (220, 220, 220))
-            draw_text_center(screen, font, "Esc to Quit", HEIGHT * 0.60, (220, 220, 220))
+            draw_text_center(screen, font, "Esc: Quit to Menu", HEIGHT * 0.60, (220, 220, 220))
 
         pygame.display.flip()
 
